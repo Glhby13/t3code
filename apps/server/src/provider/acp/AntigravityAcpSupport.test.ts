@@ -17,6 +17,7 @@ import {
   applyAntigravityAcpModelSelection,
   antigravityClientInfo,
   antigravityPermissionDisposition,
+  antigravityProcessOwnership,
   antigravitySessionMeta,
   antigravitySessionMode,
   buildAntigravityPrompt,
@@ -133,6 +134,20 @@ describe("Antigravity Auto", () => {
       ).toBe("deny");
     },
   );
+});
+
+describe("antigravityProcessOwnership", () => {
+  it.each([
+    ["linux", true],
+    ["darwin", true],
+    ["win32", false],
+  ] as const)("owns descendants on %s: %s", (platform, descendants) => {
+    expect(antigravityProcessOwnership(platform)).toEqual({
+      ownDescendantProcessGroups: descendants,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: platform,
+    });
+  });
 });
 
 describe("applyAntigravityAcpModelSelection", () => {

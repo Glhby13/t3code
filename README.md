@@ -106,3 +106,15 @@ We have limited review capacity. Small, focused fixes are the most likely to be 
 ## License
 
 [MIT](./LICENSE)
+
+## Local Antigravity continuation and router validation
+
+Author / Agent: Codex
+
+The local adapter preserves running command IDs across `end_turn`, defers completion while commands run, and accepts post-settle continuation. Synthetic subagent launch batches are settled by finalization rather than blocking it. Stop, permission boundaries and the inactivity watchdog remain in force. This addresses reproduced lifecycle defects; the cause of the historical native prompt emitting no events for 15 minutes remains unproven.
+
+The external router can read configured-account usage through `apps/server/scripts/router-usage-limits.ts`. It emits quota fields only, skips ambiguous account selections, and does not submit model prompts. Account-selection regressions live beside `routerUsageProbeConfig.ts`.
+
+Important change history: 2026-11-16 — local continuation patch adapted from upstream PRs #35073 and #30083; read-only usage bridge added. `check:changed` passes. A fresh-profile live Antigravity attempt stopped at provider-disabled admission before invoking the model; this is not a successful model smoke test. No installed application was replaced or restarted.
+
+Review follow-up (2026-11-16): the Claude quota probe now receives an allowlisted environment, with account overrides supplied only by its configured home. Deterministic adapter tests cover a command completing after the prompt has settled without Stop, and an ordinary failed command leaving the provider turn completed. The test clock advances only after the deferred-finalization hook fires. Provider-reported subagents retain the existing idle-on-finalization semantics; this does not prove that the historical app-owned continuation freeze is fixed.

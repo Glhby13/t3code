@@ -858,6 +858,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
             },
+            String(input.nativeThreadId),
           )
         : undefined;
     const additionalContext =

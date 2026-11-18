@@ -6,6 +6,7 @@ import {
   MessageId,
   NodeId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   RunAttemptId,
@@ -19,13 +20,15 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
 import type * as EffectAcpSchema from "effect-acp/compat";
@@ -35,6 +38,7 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { acpScopedNativeId } from "@t3tools/provider-acp/server/adapter";
 import { makeAntigravityAcpRuntime } from "../../provider/acp/AntigravityAcpSupport.ts";
 import { normalizeAntigravitySessionUpdate } from "../../provider/acp/AntigravityProtocol.ts";
 import { ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE } from "../../provider/antigravityAuthSupport.ts";
@@ -1972,6 +1976,189 @@ describe("AntigravityAdapterV2 runtime mode ceiling", () => {
   );
 });
 
+describe("AntigravityAdapterV2 stop", () => {
+  it.live("ends a hung turn as interrupted and tears down the agent's process tree", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const crypto = yield* SecureRandom.SecureRandom;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const fileSystem = yield* FileSystem.FileSystem;
+      const scratch = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ag-stop-" });
+      const toolPidFile = path.join(scratch, "tool.pid");
+      yield* Effect.addFinalizer(() =>
+        fileSystem.readFileString(toolPidFile).pipe(
+          Effect.flatMap((pid) =>
+            Effect.sync(() => {
+              try {
+                process.kill(Number(pid));
+                return true;
+              } catch {
+                return false;
+              }
+            }),
+          ),
+          Effect.ignore,
+        ),
+      );
+      // Stands in for agy_acp_server: it starts a long tool, such as a build, then serves ACP.
+      const agentWithTool = path.join(scratch, "agent-with-tool.mjs");
+      yield* fileSystem.writeFileString(
+        agentWithTool,
+        [
+          `import { spawn } from "node:child_process";`,
+          `import { writeFileSync } from "node:fs";`,
+          `const tool = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(toolPidFile)}, String(tool.pid));`,
+          `await import(${JSON.stringify((yield* path.toFileUrl(mockAgentPath)).href)});`,
+        ].join("\n"),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      const promptSent = yield* Deferred.make<void>();
+      let teardowns = 0;
+      const instanceId = ProviderInstanceId.make("antigravity-stop-test");
+      const adapter = yield* makeAntigravityAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          makeAntigravityAcpRuntime({
+            ...input,
+            childProcessSpawner,
+            spawn: {
+              command: process.execPath,
+              args: [agentWithTool],
+              cwd: input.cwd,
+              // agy can leave a prompt running and never confirm session/cancel.
+              env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_HANG_PROMPT_FOREVER: "1" },
+            },
+          }).pipe(
+            Effect.provideService(SecureRandom.SecureRandom, crypto),
+            Effect.map((runtime): RuntimeService => ({
+              ...runtime,
+              prompt: (request, options) =>
+                Deferred.succeed(promptSent, undefined).pipe(
+                  Effect.andThen(runtime.prompt(request, options)),
+                ),
+              ...(runtime.terminateProcessGroup === undefined
+                ? {}
+                : {
+                    terminateProcessGroup: Effect.sync(() => {
+                      teardowns++;
+                    }).pipe(Effect.andThen(runtime.terminateProcessGroup)),
+                  }),
+            })),
+          ),
+        withProcess: (_stop, task) => task,
+        defaultModel: Effect.undefined,
+      });
+      const threadId = ThreadId.make("thread-antigravity-stop");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "gemini-test-low" } as const;
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-antigravity-stop"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const terminal = yield* session.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      const now = yield* DateTime.now;
+      yield* session
+        .startTurn({
+          appThread: {
+            createdBy: "user",
+            creationSource: "web",
+            id: threadId,
+            projectId: ProjectId.make("project-antigravity-stop"),
+            title: "Antigravity stop",
+            providerInstanceId: instanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: providerThread.id,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+          threadId,
+          runId: RunId.make("run-antigravity-stop"),
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: RunAttemptId.make("attempt-antigravity-stop"),
+          rootNodeId: NodeId.make("node-antigravity-stop"),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-antigravity-stop"),
+            text: "run the build",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(promptSent);
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ProviderDriverKind.make("antigravity"),
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+      });
+
+      // Stop, as ProviderTurnControlService sends it.
+      yield* session.interruptTurn({
+        providerThread,
+        providerTurnId,
+        requestRuntimeRestart: true,
+      });
+      assert.equal(teardowns, 1);
+      const event = Option.getOrUndefined(yield* Fiber.join(terminal));
+      assert.equal(event?.type === "turn.terminal" ? event.status : undefined, "interrupted");
+      const toolPid = Number(yield* fileSystem.readFileString(toolPidFile));
+      const toolSignalable = Effect.sync(() => {
+        try {
+          process.kill(toolPid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      // A killed tool can stay an unreaped zombie on Linux, which still accepts signal 0.
+      // Without /proc, the signal probe alone decides.
+      const toolAlive =
+        (yield* toolSignalable) &&
+        (yield* fileSystem.readFileString(`/proc/${toolPid}/stat`).pipe(
+          Effect.map((stat) => stat.charAt(stat.lastIndexOf(")") + 2) !== "Z"),
+          Effect.catch(() => toolSignalable),
+        ));
+      if (toolAlive) yield* Effect.sync(() => process.kill(toolPid));
+      assert.isFalse(toolAlive, "Stop must end the tools the agent started");
+    }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
+});
+
 describe("AntigravityAdapterV2 session system prompt", () => {
   it.effect.each(["1.5.0"])(
     "carries PR linking once per turn on %s, which does not advertise a system prompt append",
@@ -2095,5 +2282,285 @@ describe("AntigravityAdapterV2 session system prompt", () => {
         assert.notInclude(append, "systemPrompt");
         assert.include(sent, "<pull_request_linking>");
       }).pipe(Effect.provide(layerSession)),
+  );
+});
+
+// Keep command and synthetic-batch settlement separate.
+/** The agent reports one tool, answers end_turn, and the user optionally presses Stop after. */
+const endTurnAfterTool = (
+  tool: Extract<EffectAcpSchema.SessionNotification["update"], { sessionUpdate: "tool_call" }>,
+  options: {
+    readonly stopAfterReply: boolean;
+    readonly completeAfterReply?: boolean;
+    readonly completionStatus?: "completed" | "failed";
+    readonly contextText?: string;
+  },
+) =>
+  Effect.gen(function* () {
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const path = yield* Path.Path;
+    const crypto = yield* SecureRandom.SecureRandom;
+    const mockAgentPath = yield* path.fromFileUrl(
+      new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+    );
+    type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+    let sessionUpdate: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+    const promptReturned = yield* Deferred.make<void>();
+    const backgroundHeld = yield* Deferred.make<void>();
+    const finalizeScheduled = yield* Deferred.make<void>();
+    const instanceId = ProviderInstanceId.make("antigravity-running-command-test");
+    const threadId = ThreadId.make("thread-antigravity-running-command");
+    const adapter = yield* makeAntigravityAdapterV2({
+      instanceId,
+      testHooks: {
+        onDeferredFinalizeScheduled: () =>
+          Deferred.succeed(finalizeScheduled, undefined).pipe(Effect.asVoid),
+        afterPromptSettledWithBackgroundWork: () =>
+          Deferred.succeed(backgroundHeld, undefined).pipe(Effect.asVoid),
+      },
+      selfInvocation: yield* resolveSelfInvocation(),
+      makeRuntime: (input) =>
+        makeAntigravityAcpRuntime({
+          ...input,
+          childProcessSpawner,
+          spawn: {
+            command: process.execPath,
+            args: [mockAgentPath],
+            cwd: input.cwd,
+            env: { T3_ACP_ANTIGRAVITY: "1" },
+          },
+        }).pipe(
+          Effect.provideService(SecureRandom.SecureRandom, crypto),
+          Effect.map((runtime): RuntimeService => ({
+            ...runtime,
+            handleSessionUpdate: (handler) =>
+              Effect.sync(() => {
+                sessionUpdate = handler;
+              }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            prompt: () =>
+              Effect.gen(function* () {
+                if (sessionUpdate === undefined) {
+                  return yield* Effect.die("the adapter must handle session updates");
+                }
+                yield* sessionUpdate(
+                  normalizeAntigravitySessionUpdate({
+                    sessionId: "mock-session-1",
+                    update: tool,
+                  }),
+                );
+                return { stopReason: "end_turn" as const };
+              }).pipe(Effect.ensuring(Deferred.succeed(promptReturned, undefined))),
+          })),
+        ),
+      withProcess: (_stop, task) => task,
+      defaultModel: Effect.undefined,
+    });
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const modelSelection = { instanceId, model: "gemini-test-low" } as const;
+    const session = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("provider-session-antigravity-running-command"),
+      modelSelection,
+      runtimePolicy,
+    });
+    const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+    yield* session.events.pipe(
+      Stream.runForEach((event) => Queue.offer(events, event)),
+      Effect.forkScoped,
+    );
+    const providerThread = yield* session.ensureThread({
+      threadId,
+      modelSelection,
+      runtimePolicy,
+    });
+    const now = yield* DateTime.now;
+    yield* session.startTurn({
+      appThread: {
+        createdBy: "user",
+        creationSource: "web",
+        id: threadId,
+        projectId: ProjectId.make("project-antigravity-running-command"),
+        title: "Antigravity running command",
+        providerInstanceId: instanceId,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+        activeProviderThreadId: providerThread.id,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+      threadId,
+      runId: RunId.make("run-antigravity-running-command"),
+      runOrdinal: 1,
+      providerTurnOrdinal: 1,
+      attemptId: RunAttemptId.make("attempt-antigravity-running-command"),
+      rootNodeId: NodeId.make("node-antigravity-running-command"),
+      providerThread,
+      message: {
+        createdBy: "user",
+        creationSource: "web",
+        messageId: MessageId.make("message-antigravity-running-command"),
+        text: options.contextText ?? "watch the log",
+        attachments: [],
+      },
+      modelSelection,
+      runtimePolicy,
+    });
+
+    let providerTurnId: ProviderAdapter.ProviderAdapterV2InterruptInput["providerTurnId"] | null =
+      null;
+    let itemStatus: string | null = null;
+    while (providerTurnId === null || itemStatus === null) {
+      const event = yield* Queue.take(events);
+      if (event.type === "provider_turn.updated") providerTurnId = event.providerTurn.id;
+      if (
+        event.type === "turn_item.updated" &&
+        event.turnItem.nativeItemRef?.nativeId === tool.toolCallId
+      ) {
+        itemStatus = event.turnItem.status;
+      }
+    }
+    yield* Deferred.await(promptReturned);
+    if (options.completeAfterReply) {
+      // Observe the adapter's settled-prompt boundary, rather than relying on a sleep.
+      yield* Deferred.await(backgroundHeld);
+      if (sessionUpdate === undefined) return yield* Effect.die("missing update callback");
+      yield* sessionUpdate(
+        normalizeAntigravitySessionUpdate({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: tool.toolCallId,
+            status: options.completionStatus ?? "completed",
+          },
+        }),
+      );
+      yield* Deferred.await(finalizeScheduled);
+      yield* TestClock.adjust("3 seconds");
+    }
+    if (options.stopAfterReply) {
+      yield* session.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true });
+    }
+
+    let terminalStatus: string | null = null;
+    while (terminalStatus === null) {
+      const event = yield* Queue.take(events);
+      if (
+        event.type === "turn_item.updated" &&
+        event.turnItem.nativeItemRef?.nativeId === tool.toolCallId
+      ) {
+        itemStatus = event.turnItem.status;
+      }
+      if (event.type === "turn.terminal") terminalStatus = event.status;
+    }
+    return { itemStatus, terminalStatus };
+  }).pipe(Effect.provide(layerSession), Effect.scoped);
+
+describe("AntigravityAdapterV2 running commands", () => {
+  it.effect(
+    "settles repeated Stop and late completion boundaries with a large synthetic prompt",
+    () =>
+      Effect.gen(function* () {
+        // Synthetic data only; this measures adapter boundaries, not native model endurance.
+        const contextText = "synthetic context line for cancellation boundary\n".repeat(12_000);
+        for (let cycle = 0; cycle < 6; cycle++) {
+          const stopped = cycle % 2 === 0;
+          const result = yield* endTurnAfterTool(
+            {
+              sessionUpdate: "tool_call",
+              toolCallId: `stress-command-${cycle}`,
+              title: "Running run_command",
+              kind: "execute",
+              status: "in_progress",
+              rawInput: { CommandLine: "fixture command" },
+            },
+            { stopAfterReply: stopped, completeAfterReply: !stopped, contextText },
+          );
+          assert.equal(result.terminalStatus, stopped ? "interrupted" : "completed");
+          if (stopped) assert.notEqual(result.itemStatus, "completed");
+          else assert.equal(result.itemStatus, "completed");
+        }
+      }),
+  );
+  it.effect("keeps an ordinary failed command distinct from a failed provider turn", () =>
+    Effect.gen(function* () {
+      const result = yield* endTurnAfterTool(
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "failed-command",
+          title: "Running run_command",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { CommandLine: "exit 1" },
+        },
+        { stopAfterReply: false, completeAfterReply: true, completionStatus: "failed" },
+      );
+      assert.equal(result.itemStatus, "failed");
+      assert.equal(result.terminalStatus, "completed");
+    }),
+  );
+  it.effect("settles after a running command completes after end_turn without Stop", () =>
+    Effect.gen(function* () {
+      const result = yield* endTurnAfterTool(
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "late-command",
+          title: "Running run_command",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { CommandLine: "fixture command" },
+        },
+        { stopAfterReply: false, completeAfterReply: true },
+      );
+      assert.equal(result.itemStatus, "completed");
+      assert.equal(result.terminalStatus, "completed");
+    }),
+  );
+  it.effect("does not mark a command completed while it is still running at end_turn", () =>
+    Effect.gen(function* () {
+      const result = yield* endTurnAfterTool(
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "watcher",
+          title: "Running run_command",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { CommandLine: "tail -f app.log" },
+        },
+        { stopAfterReply: true },
+      );
+      // It never reported finishing, so it must not be shown as completed.
+      assert.notEqual(result.itemStatus, "completed");
+    }),
+  );
+
+  it.effect("completes the turn at end_turn while a launched subagent batch runs", () =>
+    Effect.gen(function* () {
+      const result = yield* endTurnAfterTool(
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "batch",
+          title: "Running start_subagent",
+          kind: "other",
+          status: "completed",
+          rawOutput: "Started two agents.",
+        },
+        { stopAfterReply: false },
+      );
+      assert.equal(result.terminalStatus, "completed");
+    }),
   );
 });

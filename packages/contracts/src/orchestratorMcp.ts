@@ -192,6 +192,9 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
     description: "Mode 'wait' only. At most 45 s. A timeout does not cancel the child.",
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  planRef: Schema.optional(Schema.String).annotate({
+    description: "`planRef` from `plan_work`'s payload; required for another provider.",
+  }),
   runtimeMode: Schema.optional(
     OrchestratorMcpRuntimeMode.annotate({
       description:

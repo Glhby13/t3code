@@ -85,6 +85,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { ServerConfig } from "../config.ts";
+import * as DelegationPolicy from "./DelegationAuthorization.ts";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -1308,6 +1310,12 @@ const make = Effect.gen(function* () {
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const remoteDelegation = yield* RemoteDelegation.RemoteDelegation;
+  const policySource = Option.getOrUndefined(
+    yield* Effect.serviceOption(DelegationPolicy.DelegationPolicySource),
+  );
+  const serverStateDir = Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig))?.stateDir;
+  const delegationPolicy: Effect.Effect<DelegationPolicy.DelegationPolicy> =
+    policySource?.load ?? Effect.sync(() => DelegationPolicy.loadDelegationPolicy(serverStateDir));
 
   const requireProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
@@ -1400,6 +1408,68 @@ const make = Effect.gen(function* () {
         interactionMode: parent.thread.interactionMode,
       },
     } as const;
+  });
+
+  // Server-side gate for cross-provider delegation. Plan ownership is read from the caller thread's
+  // own recorded `plan_work` results, never from a thread id the model supplies.
+  const authorizeDelegation = Effect.fn("OrchestratorMcpService.authorizeDelegation")(function* (
+    caller: { readonly threadId: ThreadId; readonly providerInstanceId: string },
+    targetInstanceId: string,
+    planRef: string | undefined,
+  ) {
+    const policy = yield* delegationPolicy;
+    const needsHistory =
+      policy.enforce &&
+      policy.source !== "invalid" &&
+      targetInstanceId !== caller.providerInstanceId;
+    const items = needsHistory
+      ? yield* loadThreadRecords(caller.threadId, ["turnItems"], {
+          turnItemTypes: ["dynamic_tool"],
+        }).pipe(
+          Effect.map(
+            (records) =>
+              records.turnItems as unknown as ReadonlyArray<DelegationPolicy.RecordedToolItem>,
+          ),
+          Effect.orElseSucceed(() => [] as ReadonlyArray<DelegationPolicy.RecordedToolItem>),
+        )
+      : [];
+    const nowMs = yield* Clock.currentTimeMillis;
+    const registry = needsHistory
+      ? yield* (
+          policySource?.loadRegistry?.(policy) ??
+            Effect.sync(() => DelegationPolicy.loadPlanRegistry(policy.planDir))
+        )
+      : [];
+    const decision = DelegationPolicy.decideDelegation(
+      policy,
+      {
+        callerThreadId: caller.threadId,
+        callerInstanceId: caller.providerInstanceId,
+        targetInstanceId,
+        planRef,
+      },
+      items,
+      nowMs,
+      registry,
+    );
+    if (policy.enforce) {
+      yield* Effect.logInfo("delegation-authorization").pipe(
+        Effect.annotateLogs({
+          decision: decision.allow ? "ALLOW" : "DENY",
+          reason: decision.reason,
+          thread: caller.threadId,
+          plan: decision.planId ?? "-",
+          targetProvider: targetInstanceId,
+          policySource: policy.source,
+        }),
+      );
+    }
+    if (!decision.allow) {
+      return yield* failure(
+        "capability_denied",
+        `Delegation to ${targetInstanceId} denied (${decision.reason}). Run plan_work in this thread and pass its delegate_task_payload unchanged, including planRef.`,
+      );
+    }
   });
 
   const loadThreadCaller = Effect.fn("OrchestratorMcpService.loadThreadCaller")(function* (
@@ -2804,6 +2874,9 @@ const make = Effect.gen(function* () {
       if (input.target !== undefined && environmentId !== undefined) {
         yield* requireCapability(callerScope);
         const scope = yield* requireThreadScope(callerScope, "delegate_task");
+        if (input.target.providerInstanceId !== undefined) {
+          yield* authorizeDelegation(scope.thread, input.target.providerInstanceId, input.planRef);
+        }
         // The task's child runs as an ordinary thread there; this thread keeps the task.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
@@ -2851,6 +2924,9 @@ const make = Effect.gen(function* () {
         cwd: yield* parentWorkspaceCwd(parent),
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
+      if (!isRetryOfAcceptedDelegation) {
+        yield* authorizeDelegation(scope.thread, target.modelSelection.instanceId, input.planRef);
+      }
       const runtimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
         input.runtimeMode,

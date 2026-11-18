@@ -100,6 +100,7 @@ export interface AntigravityAdapterV2Options {
   readonly onSessionEvent?: AcpAdapterV2Flavor["onSessionEvent"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
+  readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
   /** The agent's GEMINI_HOME. Its session logs show turns that ended on an upstream error. */
   readonly profileDirectory?: string;
 }
@@ -291,6 +292,8 @@ export function makeAntigravityAcpAdapterFlavor(
     checksVersionAtHandshake: true,
     // Antigravity can leave a prompt open without updates; long tools and approvals pause this.
     promptInactivityTimeout: "15 minutes",
+    restartRuntimeAfterInterrupt: true,
+    terminateRuntimeProcessGroupOnInterrupt: true,
     reportsPerTurnPromptUsage: true,
     geminiPromptUsage: true,
     ...(profileDirectory === undefined
@@ -322,6 +325,7 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
     flavor: makeAntigravityAcpAdapterFlavor({ ...options, ...services }),
     selfInvocation: options.selfInvocation,
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
+    ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
     ...(options.continuationRequests === undefined
       ? {}
       : { continuationRequests: options.continuationRequests }),

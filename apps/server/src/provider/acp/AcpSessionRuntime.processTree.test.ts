@@ -55,6 +55,12 @@ function makeController(input: {
   return { controller, processes, signals };
 }
 
+const killQuietly = (pid: number) => {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {}
+};
+
 const server = () => identity(process.pid, 1, process.pid, process.pid, "server");
 
 describe("terminatePosixOwnedProcessTree", () => {
@@ -469,7 +475,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         fixture.processes.set(parent.pid, parent);
         fixture.processes.set(
           parent.pid + 10_000,
-          identity(parent.pid + 10_000, parent.pid, parent.pgid, parent.sid),
+          identity(parent.pid + 10_000, parent.pid, parent.pgid, parent.sid ?? parent.pgid),
         );
       }
       let passes = 0;
@@ -841,14 +847,160 @@ describe("terminatePosixOwnedProcessTree", () => {
     },
   );
 
-  it("fails closed where a stable POSIX identity provider is unavailable", () => {
-    try {
-      AcpSessionRuntime.makePosixProcessTreeController("darwin");
-      throw new Error("Expected Darwin process ownership to fail closed");
-    } catch (error) {
-      expect(error).toMatchObject({
-        detail: "Detached ACP descendant ownership is unsupported on darwin",
-      });
+  it("fails closed where no stable POSIX identity provider exists", () => {
+    expect(() => AcpSessionRuntime.makePosixProcessTreeController("win32")).toThrow(
+      expect.objectContaining({
+        detail: "Detached ACP descendant ownership is unsupported on win32",
+      }),
+    );
+  });
+
+  it("parses macOS ps rows with spaces, padded days and zombies", () => {
+    const rows = AcpSessionRuntime.parseDarwinPsOutput(
+      [
+        "    1     0     1 Ss   Thu Nov 13 09:00:00 2026 /sbin/launchd",
+        "  200     1   200 S+   Thu Nov  3 09:00:01 2026 /Applications/My App.app/Contents/MacOS/My App",
+        "  201   200   201 Z    Thu Nov  3 09:00:02 2026 (sleep)",
+        "",
+      ].join("\n"),
+    );
+    expect(rows.map((row) => [row.pid, row.ppid, row.pgid, row.state, row.sid])).toEqual([
+      [1, 0, 1, "S", undefined],
+      [200, 1, 200, "S", undefined],
+      [201, 200, 201, "Z", undefined],
+    ]);
+    expect(rows[1]).toMatchObject({
+      executable: "/Applications/My App.app/Contents/MacOS/My App",
+      startTime: "Thu Nov  3 09:00:01 2026",
+    });
+    expect(AcpSessionRuntime.posixProcessIsZombie(rows[2]!)).toBe(true);
+  });
+
+  it("fails closed on malformed macOS ps output", () => {
+    for (const bad of [
+      "garbage",
+      "12 1 12 S not-a-date /bin/x",
+      "x 1 12 S Thu Nov 13 09:00:00 2026 /bin/x",
+      "0 1 12 S Thu Nov 13 09:00:00 2026 /bin/x",
+      "12 1 12 S Thu Nov 13 09:00:00 2026",
+    ]) {
+      expect(() => AcpSessionRuntime.parseDarwinPsOutput(bad)).toThrow();
     }
   });
+
+  it("drives macOS ps with an absolute-path-safe argv and treats a missing pid as gone", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const controller = AcpSessionRuntime.makeDarwinProcessTreeController((args) => {
+      calls.push(args);
+      if (args[0] === "-p") return { status: 1, stdout: "" };
+      return {
+        status: 0,
+        stdout:
+          "10 1 10 S Thu Nov 13 09:00:00 2026 /bin/a b\n11 10 11 S Thu Nov 13 09:00:01 2026 /bin/sleep\n",
+      };
+    });
+    expect(controller.identity(99)).toBeUndefined();
+    expect(controller.childPidsOf(10)).toEqual([11]);
+    expect(controller.snapshot()).toHaveLength(2);
+    expect(calls[0]).toEqual(["-p", "99", "-o", "pid=,ppid=,pgid=,stat=,lstart=,comm="]);
+    expect(() =>
+      AcpSessionRuntime.makeDarwinProcessTreeController(() => ({
+        status: 2,
+        stdout: "",
+      })).snapshot(),
+    ).toThrow();
+    expect(() =>
+      AcpSessionRuntime.makeDarwinProcessTreeController(() => ({
+        status: 0,
+        stdout: "junk",
+      })).identity(5),
+    ).toThrow();
+  });
+
+  it.live("macOS: signals no-sid grandchildren, never the T3 pgid, and skips reused pids", () =>
+    Effect.gen(function* () {
+      const darwin = (
+        pid: number,
+        ppid: number,
+        pgid: number,
+        startTime = String(pid),
+      ): AcpSessionRuntime.AcpPosixProcessIdentity => ({
+        executable: "/bin/x",
+        pgid,
+        pid,
+        ppid,
+        startTime,
+        state: "S",
+      });
+      const reused = darwin(130, 100, 130, "reused");
+      const fixture = makeController({
+        processes: [
+          { ...darwin(process.pid, 1, process.pid) },
+          darwin(100, process.pid, 100),
+          darwin(110, 100, 110),
+          darwin(120, 110, process.pid),
+          darwin(130, 100, 130, "owned"),
+        ],
+        onProcess: (processes, pid) => {
+          if (pid === 130) processes.set(130, reused);
+          else processes.delete(pid);
+        },
+      });
+      const result = yield* Effect.exit(
+        AcpSessionRuntime.terminatePosixOwnedProcessTree({
+          controller: fixture.controller,
+          grace: 0,
+          rootPid: 100,
+        }),
+      );
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(fixture.signals).toContain("process:110:SIGTERM");
+      expect(fixture.signals.some((entry) => entry.includes(":120:"))).toBe(false);
+      expect(fixture.processes.get(130)).toEqual(reused);
+    }),
+  );
+
+  it.live("macOS: terminates an escaped own-PGID grandchild of a real ACP-like process", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) !== "darwin") return;
+      const controller = AcpSessionRuntime.makePosixProcessTreeController("darwin");
+      const script =
+        "const c=require('node:child_process').spawn('/bin/sleep',['600'],{detached:true,stdio:'ignore'});" +
+        "console.log(c.pid);setInterval(()=>{},1000)";
+      const root = NodeChildProcess.spawn(process.execPath, ["-e", script], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const rootExited = new Promise<void>((resolve) => root.once("exit", () => resolve()));
+      const grandchildPid = yield* Effect.promise(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            root.stdout.once("data", (chunk: Buffer) => resolve(Number(chunk.toString().trim())));
+            root.once("error", reject);
+          }),
+      );
+      yield* Effect.gen(function* () {
+        const rootIdentity = controller.identity(root.pid!);
+        const grandchild = controller.identity(grandchildPid);
+        expect(grandchild?.ppid).toBe(root.pid);
+        expect(grandchild?.pgid).toBe(grandchildPid);
+        expect(grandchild?.pgid).not.toBe(rootIdentity?.pgid);
+        yield* AcpSessionRuntime.terminatePosixOwnedProcessTree({
+          controller,
+          grace: 0,
+          rootPid: root.pid!,
+        });
+        yield* Effect.promise(() => rootExited);
+        const after = controller.identity(grandchildPid);
+        expect(after === undefined || after.state === "Z").toBe(true);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            killQuietly(-root.pid!);
+            killQuietly(grandchildPid);
+          }),
+        ),
+      );
+    }),
+  );
 });

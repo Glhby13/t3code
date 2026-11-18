@@ -1,5 +1,10 @@
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  chunkByBytes,
+  readSessionOverlay,
+  recordSessionOverlayInjection,
+} from "@t3tools/provider-core/server/sessionOverlay";
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
@@ -41,8 +46,22 @@ export interface CodexRuntimeInfo {
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | T3CodeToolAvailability = true,
+  threadId?: string,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
+  // T3-only rules from ~/.t3/session-rules/codex.md; keyed entries replace, never stack.
+  const overlay = readSessionOverlay("codex");
+  const overlayEntries = overlay
+    ? Object.fromEntries(
+        chunkByBytes(overlay.text, CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES).map((value, index) => [
+          `t3_code_overlay_${String(index + 1).padStart(2, "0")}`,
+          { kind: "application" as const, value },
+        ]),
+      )
+    : {};
+  if (overlay) {
+    recordSessionOverlayInjection(overlay, { source: "codex.turn.additionalContext", threadId });
+  }
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...Object.fromEntries(
@@ -51,6 +70,7 @@ export function buildCodexAdditionalContext(
         { kind: "application" as const, value: section },
       ]),
     ),
+    ...overlayEntries,
     t3_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),

@@ -117,6 +117,10 @@ import {
   type T3AcpInstructionState,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  readSessionOverlay,
+  recordSessionOverlayInjection,
+} from "@t3tools/provider-core/server/sessionOverlay";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import {
@@ -2180,6 +2184,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           });
         // Client terminals run with server privileges; apply turn policy and prior user approvals.
         const clientPolicyGrants = makeAcpClientPolicyGrants();
+        let overlayInjectedSessionId: string | null = null;
         let latestRuntimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy =
           input.runtimePolicy;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -8923,6 +8928,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               driver,
               detail: "ACP turn requires non-empty text or attachments",
             });
+          }
+          if (!isNativeSlashCommand && String(driver) === "antigravity") {
+            // T3-only rules (~/.t3/session-rules/antigravity.md), once per ACP session.
+            const overlaySessionId = yield* Ref.get(activeSessionId);
+            const overlay = readSessionOverlay("antigravity");
+            if (
+              overlay &&
+              overlaySessionId !== null &&
+              overlaySessionId !== overlayInjectedSessionId
+            ) {
+              overlayInjectedSessionId = overlaySessionId;
+              prompt.push({ type: "text", text: overlay.text });
+              recordSessionOverlayInjection(overlay, {
+                source: "acp.prompt.first-turn",
+                threadId: String(turnInput.threadId),
+              });
+            }
           }
           if (sendRuntimeInstructions) {
             prompt.push({ type: "text", text: runtimeInstructions });

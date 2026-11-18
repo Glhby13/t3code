@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -195,7 +196,8 @@ export interface AcpPosixProcessIdentity {
   readonly pgid: number;
   readonly pid: number;
   readonly ppid: number;
-  readonly sid: number;
+  /** Linux only; macOS `ps` does not report it, so guards compare it only when both sides know it. */
+  readonly sid?: number;
   readonly state?: string;
   readonly startTime: string;
 }
@@ -641,6 +643,114 @@ function makeLinuxProcessTreeController(): AcpPosixProcessTreeController {
   };
 }
 
+const DARWIN_PS_PATH = "/bin/ps";
+const DARWIN_PS_FORMAT = "pid=,ppid=,pgid=,stat=,lstart=,comm=";
+const DARWIN_PS_LINE =
+  /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([A-Za-z]{3} [A-Za-z]{3} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s+(.+?)\s*$/;
+
+export interface AcpDarwinPsResult {
+  readonly status: number | null;
+  readonly stdout: string;
+}
+
+export type AcpDarwinPsRunner = (args: ReadonlyArray<string>) => AcpDarwinPsResult;
+
+const runDarwinPs: AcpDarwinPsRunner = (args) => {
+  // Absolute path, no shell, fixed locale: lstart is the pid-reuse identity and must parse stably.
+  const result = NodeChildProcess.spawnSync(DARWIN_PS_PATH, [...args], {
+    encoding: "utf8",
+    env: { LC_ALL: "C", PATH: "/usr/bin:/bin" },
+    maxBuffer: 16 * 1024 * 1024,
+    shell: false,
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (result.error !== undefined) throw result.error;
+  return { status: result.status, stdout: result.stdout };
+};
+
+/** Parses `ps -o pid=,ppid=,pgid=,stat=,lstart=,comm=`; any unparsable line fails closed. */
+export function parseDarwinPsOutput(stdout: string): ReadonlyArray<AcpPosixProcessIdentity> {
+  const rows: Array<AcpPosixProcessIdentity> = [];
+  for (const line of stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    const match = DARWIN_PS_LINE.exec(line);
+    if (match === null) {
+      throw new AcpProcessGroupTerminationError({ detail: "Unparsable macOS ps output line" });
+    }
+    const [, pid, ppid, pgid, stat, startTime, comm] = match;
+    const parsed = [Number(pid), Number(ppid), Number(pgid)];
+    if (
+      !parsed.every(Number.isSafeInteger) ||
+      parsed[0]! <= 0 ||
+      stat === undefined ||
+      startTime === undefined ||
+      comm === undefined
+    ) {
+      throw new AcpProcessGroupTerminationError({ detail: "Invalid macOS ps process fields" });
+    }
+    rows.push({
+      executable: comm,
+      pgid: parsed[2]!,
+      pid: parsed[0]!,
+      ppid: parsed[1]!,
+      startTime,
+      state: stat.slice(0, 1),
+    });
+  }
+  return rows;
+}
+
+export function makeDarwinProcessTreeController(
+  runPs: AcpDarwinPsRunner = runDarwinPs,
+): AcpPosixProcessTreeController {
+  const snapshot = () => {
+    const result = runPs(["-ax", "-o", DARWIN_PS_FORMAT]);
+    const rows = result.status === 0 ? parseDarwinPsOutput(result.stdout) : [];
+    if (rows.length === 0) {
+      throw new AcpProcessGroupTerminationError({ detail: "macOS ps returned no process table" });
+    }
+    return rows;
+  };
+  // Always a fresh read: callers use it as the identity check immediately before signalling.
+  const identity = (pid: number) => {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+    const result = runPs(["-p", String(pid), "-o", DARWIN_PS_FORMAT]);
+    const rows = parseDarwinPsOutput(result.stdout);
+    if (result.status !== 0 && !(result.status === 1 && rows.length === 0)) {
+      throw new AcpProcessGroupTerminationError({ detail: `macOS ps failed for pid ${pid}` });
+    }
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1 || rows[0]!.pid !== pid) {
+      throw new AcpProcessGroupTerminationError({ detail: `Unexpected macOS ps rows for ${pid}` });
+    }
+    return rows[0];
+  };
+  return {
+    childPidsOf: (pid) => snapshot().flatMap((entry) => (entry.ppid === pid ? [entry.pid] : [])),
+    childrenOf: (pid) => snapshot().filter((entry) => entry.ppid === pid),
+    identity,
+    snapshot,
+    signalProcess: (pid, signal) => process.kill(pid, signal),
+  };
+}
+
+const DARWIN_OBSERVE_INTERVAL = "1 second";
+
+/** Low-frequency, one-`ps`-per-tick ledger refresh; Stop still re-discovers from a fresh snapshot. */
+function observePosixOwnershipSnapshotsPeriodically(input: {
+  readonly controller: AcpPosixProcessTreeController;
+  readonly ledger: Map<string, AcpOwnedPosixProcess>;
+  readonly root: AcpPosixOwnershipRoot;
+  readonly rootPid: number;
+}): Effect.Effect<never> {
+  return Effect.forever(
+    Effect.sync(() =>
+      capturePosixOwnershipLedger({ ...input, table: input.controller.snapshot() }),
+    ).pipe(Effect.exit, Effect.andThen(Effect.sleep(DARWIN_OBSERVE_INTERVAL))),
+  ).pipe(withWallClock);
+}
+
 export function observePosixOwnershipLedger(input: {
   readonly childQueues: Map<number, Array<number>>;
   readonly controller: AcpPosixProcessTreeController;
@@ -757,6 +867,7 @@ export function makePosixProcessTreeController(
   platform: NodeJS.Platform,
 ): AcpPosixProcessTreeController {
   if (platform === "linux") return makeLinuxProcessTreeController();
+  if (platform === "darwin") return makeDarwinProcessTreeController();
   throw new AcpProcessGroupTerminationError({
     detail: `Detached ACP descendant ownership is unsupported on ${platform}`,
   });
@@ -948,7 +1059,7 @@ export function terminatePosixOwnedProcessTree(input: {
         candidate.pid === process.pid ||
         observed === undefined ||
         observed.pgid === current.pgid ||
-        observed.sid === current.sid ||
+        (observed.sid !== undefined && current.sid !== undefined && observed.sid === current.sid) ||
         !samePosixProcessIdentity(candidate, observed)
       ) {
         continue;
@@ -1575,7 +1686,14 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         new EffectAcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
     });
     // Cgroup teardown needs only the root identity captured above.
-    if (linuxCgroupLease === undefined) {
+    if (linuxCgroupLease === undefined && options.processGroupPlatform === "darwin") {
+      yield* observePosixOwnershipSnapshotsPeriodically({
+        controller: posixController,
+        ledger: posixOwnershipLedger,
+        root: posixOwnershipRoot,
+        rootPid: Number(child.pid),
+      }).pipe(Effect.forkIn(runtimeScope));
+    } else if (linuxCgroupLease === undefined) {
       yield* observePosixOwnershipLedgerContinuously({
         childQueues: posixOwnershipChildQueues,
         controller: posixController,

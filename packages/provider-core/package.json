@@ -135,6 +135,10 @@
       "types": "./src/server/randomUuid.ts",
       "import": "./src/server/randomUuid.ts"
     },
+    "./server/sessionOverlay": {
+      "types": "./src/server/sessionOverlay.ts",
+      "import": "./src/server/sessionOverlay.ts"
+    },
     "./server/runtimeInstructions": {
       "types": "./src/server/runtimeInstructions.ts",
       "import": "./src/server/runtimeInstructions.ts"
