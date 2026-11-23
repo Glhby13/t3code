@@ -292,8 +292,6 @@ export function makeAntigravityAcpAdapterFlavor(
     checksVersionAtHandshake: true,
     // Antigravity can leave a prompt open without updates; long tools and approvals pause this.
     promptInactivityTimeout: "15 minutes",
-    restartRuntimeAfterInterrupt: true,
-    terminateRuntimeProcessGroupOnInterrupt: true,
     reportsPerTurnPromptUsage: true,
     geminiPromptUsage: true,
     ...(profileDirectory === undefined

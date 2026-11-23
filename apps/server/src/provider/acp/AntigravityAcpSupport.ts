@@ -23,6 +23,7 @@ import {
   makeAntigravityStdoutTransform,
 } from "../antigravityAuthSupport.ts";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   acpPermissionDisposition,
   type AcpRuntimePolicy,
