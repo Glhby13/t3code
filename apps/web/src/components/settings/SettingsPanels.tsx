@@ -509,6 +509,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
       ? [gt("Panel animations")]
       : []),
+    ...(settings.sidebarHeaderStyle !== null && settings.sidebarHeaderStyle !== "native"
+      ? [gt("Sidebar header")]
+      : []),
+    ...(settings.sidebarHeaderAnimation !== null && settings.sidebarHeaderAnimation !== "none"
+      ? [gt("Header animation")]
+      : []),
     ...(settings.environmentIdentificationMode !==
     DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
       ? [gt("Environment identification")]
@@ -714,6 +720,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
       screenReaderWindowTitle: DEFAULT_UNIFIED_SETTINGS.screenReaderWindowTitle,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
+      sidebarHeaderStyle: "native",
+      sidebarHeaderAnimation: "none",
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,

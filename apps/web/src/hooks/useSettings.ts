@@ -39,6 +39,7 @@ import {
   resolveThemeHalf,
   subscribeToThemePreview,
   themeAllowsSidebarArtwork,
+  THEME_HALVES_STORAGE_KEY,
 } from "~/themePalette";
 import {
   modelPreferencesMigrationPatch,
@@ -54,7 +55,8 @@ import { environmentCatalog } from "~/connection/catalog";
 import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useTheme } from "./useTheme";
+import { THEME_STORAGE_KEY, useTheme } from "./useTheme";
+import { hydrateSidebarDecoration } from "~/sidebarDesign";
 import { msg } from "gt-react";
 import { m } from "~/i18n/messages";
 import {
@@ -134,6 +136,23 @@ export function subscribeClientSettingsHydration(listener: () => void): () => vo
   };
 }
 
+function readLegacySidebarThemeId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const storedHalves: unknown = JSON.parse(
+      window.localStorage.getItem(THEME_HALVES_STORAGE_KEY) ?? "null",
+    );
+    const darkHalf =
+      typeof storedHalves === "object" && storedHalves !== null && "dark" in storedHalves
+        ? storedHalves.dark
+        : null;
+    return typeof darkHalf === "string" ? darkHalf : theme;
+  } catch {
+    return null;
+  }
+}
+
 async function hydrateClientSettings(): Promise<void> {
   if (clientSettingsHydrationStatus === "ready") {
     return;
@@ -150,13 +169,24 @@ async function hydrateClientSettings(): Promise<void> {
   );
   const nextHydration = (async () => {
     try {
-      const persistedSettings = await ensureLocalApi().persistence.getClientSettings();
+      const legacyThemeId = readLegacySidebarThemeId();
+      const persistence = ensureLocalApi().persistence;
+      const persistedSettings = await persistence.getClientSettings();
       if (hydrationGeneration !== clientSettingsHydrationGeneration) {
         return;
       }
-      if (persistedSettings) {
-        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
+      const previous = persistedSettings ?? DEFAULT_CLIENT_SETTINGS;
+      const decorated = hydrateSidebarDecoration(previous, legacyThemeId);
+      if (decorated !== previous) {
+        await persistence.setClientSettings(decorated).catch((error: unknown) => {
+          console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} sidebar migration failed`, {
+            operation: "hydrate",
+            ...safeErrorLogAttributes(error),
+          });
+        });
       }
+      if (hydrationGeneration !== clientSettingsHydrationGeneration) return;
+      replaceClientSettingsSnapshot(decorated);
       unsubscribeOtherTabClientSettings ??= subscribeBrowserClientSettingsWrites(
         refreshClientSettingsFromOtherTab,
       );

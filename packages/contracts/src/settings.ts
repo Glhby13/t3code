@@ -209,6 +209,17 @@ export const EnvironmentIdentificationMode = Schema.Literals([
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
+export const SidebarHeaderStyle = Schema.Literals(["native", "hud", "chamfer"]);
+export type SidebarHeaderStyle = typeof SidebarHeaderStyle.Type;
+export const SidebarHeaderAnimation = Schema.Literals([
+  "none",
+  "cursor-blink",
+  "hazard-scroll",
+  "dual-rail",
+  "hard-scan",
+]);
+export type SidebarHeaderAnimation = typeof SidebarHeaderAnimation.Type;
+
 export const SnapShotKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
     (shortcut) =>
@@ -477,6 +488,12 @@ export const ClientSettingsSchema = Schema.Struct({
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
+  ),
+  sidebarHeaderStyle: Schema.NullOr(SidebarHeaderStyle).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  sidebarHeaderAnimation: Schema.NullOr(SidebarHeaderAnimation).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
@@ -2080,6 +2097,8 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
+  sidebarHeaderStyle: Schema.optionalKey(Schema.NullOr(SidebarHeaderStyle)),
+  sidebarHeaderAnimation: Schema.optionalKey(Schema.NullOr(SidebarHeaderAnimation)),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),

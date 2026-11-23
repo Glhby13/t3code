@@ -1,0 +1,114 @@
+[
+  {
+    "id": "cp77-yellow",
+    "name": "Yellow",
+    "canvas": "#0a0a0a",
+    "accent": "#fcee0a",
+    "secondary": "#ff2a8a",
+    "colors": {
+      "accentForeground": "#0a0a0a",
+      "focus": "#ff2a8a",
+      "sidebarRowActive": "#310f1e",
+      "sidebarRowSelected": "#3b1024",
+      "messageSurface": "#2c0e1c"
+    }
+  },
+  {
+    "id": "cp77-redline",
+    "name": "Redline",
+    "canvas": "#0d0507",
+    "accent": "#ff003c",
+    "secondary": "#02d7f2",
+    "colors": {
+      "accentForeground": "#0d0507",
+      "focus": "#02d7f2",
+      "sidebarRowActive": "#0b272d",
+      "sidebarRowSelected": "#0b2f36",
+      "messageSurface": "#0b2228"
+    }
+  },
+  {
+    "id": "cp77-nightcity",
+    "name": "Night City",
+    "canvas": "#0b0614",
+    "accent": "#ff2a6d",
+    "secondary": "#fcee0a",
+    "colors": {
+      "accentForeground": "#0b0614",
+      "focus": "#fcee0a",
+      "sidebarRowActive": "#322b12",
+      "sidebarRowSelected": "#3b3412",
+      "messageSurface": "#2d2613"
+    }
+  },
+  {
+    "id": "cp77-afterlife",
+    "name": "Afterlife",
+    "canvas": "#0f0510",
+    "accent": "#ff003c",
+    "secondary": "#ff2a8a",
+    "colors": {
+      "accentForeground": "#0f0510",
+      "focus": "#ff2a8a",
+      "sidebarRowActive": "#350b24",
+      "sidebarRowSelected": "#3f0c28",
+      "messageSurface": "#310a21"
+    }
+  },
+  {
+    "id": "cp77-kiroshi",
+    "name": "Kiroshi",
+    "canvas": "#050a0d",
+    "accent": "#02d7f2",
+    "secondary": "#ff2a8a",
+    "colors": {
+      "accentForeground": "#050a0d",
+      "focus": "#ff2a8a",
+      "sidebarRowActive": "#2d0f21",
+      "sidebarRowSelected": "#371026",
+      "messageSurface": "#280e1e"
+    }
+  },
+  {
+    "id": "cp77-braindance",
+    "name": "Braindance",
+    "canvas": "#0a0b14",
+    "accent": "#fcee0a",
+    "secondary": "#02d7f2",
+    "colors": {
+      "accentForeground": "#0a0b14",
+      "focus": "#02d7f2",
+      "sidebarRowActive": "#092c38",
+      "sidebarRowSelected": "#083440",
+      "messageSurface": "#092833"
+    }
+  },
+  {
+    "id": "cp77-arasaka",
+    "name": "Arasaka",
+    "canvas": "#080808",
+    "accent": "#e5e5e5",
+    "secondary": "#fcee0a",
+    "colors": {
+      "accentForeground": "#080808",
+      "focus": "#fcee0a",
+      "sidebarRowActive": "#2f2d08",
+      "sidebarRowSelected": "#393608",
+      "messageSurface": "#2a2808"
+    }
+  },
+  {
+    "id": "cp77-militech",
+    "name": "Militech",
+    "canvas": "#080c08",
+    "accent": "#9dff00",
+    "secondary": "#ff2a8a",
+    "colors": {
+      "accentForeground": "#080c08",
+      "focus": "#ff2a8a",
+      "sidebarRowActive": "#30111d",
+      "sidebarRowSelected": "#391222",
+      "messageSurface": "#2b101a"
+    }
+  }
+]

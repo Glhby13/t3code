@@ -118,3 +118,13 @@ The external router can read configured-account usage through `apps/server/scrip
 Important change history: 2026-11-16 — local continuation patch adapted from upstream PRs #35073 and #30083; read-only usage bridge added. `check:changed` passes. A fresh-profile live Antigravity attempt stopped at provider-disabled admission before invoking the model; this is not a successful model smoke test. No installed application was replaced or restarted.
 
 Review follow-up (2026-11-16): the Claude quota probe now receives an allowlisted environment, with account overrides supplied only by its configured home. Deterministic adapter tests cover a command completing after the prompt has settled without Stop, and an ordinary failed command leaving the provider turn completed. The test clock advances only after the deferred-finalization hook fires. Provider-reported subagents retain the existing idle-on-finalization semantics; this does not prove that the historical app-owned continuation freeze is fixed.
+
+## Local sidebar Appearance settings
+
+Author / Agent: Codex
+
+Choose colors under **Settings → Appearance → Themes**. The **Sidebar** section lets you choose the header frame and animation independently. The eight custom palettes appear as dark theme options. On upgrade, known combined presets supply the initial palette, frame, and animation. These preferences are stored on the client. The sidebar overlay respects the system Reduce Motion preference.
+
+**Important change history**
+
+- 2026-11-23 — M40 splits the three selectors and preserves header geometry. Local Chromium verification covered all 300 combinations in the production renderer with and without Reduce Motion.

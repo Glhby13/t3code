@@ -38,7 +38,7 @@ type ThemeSnapshot = {
 
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
 
-const STORAGE_KEY = "t3code:theme";
+export const THEME_STORAGE_KEY = "t3code:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
@@ -188,11 +188,11 @@ export function readThemePreference(): Theme {
   if (typeof window === "undefined") return DEFAULT_THEME_SNAPSHOT.theme;
   let raw: string | null;
   try {
-    raw = window.localStorage.getItem(STORAGE_KEY);
+    raw = window.localStorage.getItem(THEME_STORAGE_KEY);
   } catch (cause) {
     throw new ThemeStorageError({
       operation: "read",
-      storageKey: STORAGE_KEY,
+      storageKey: THEME_STORAGE_KEY,
       cause,
     });
   }
@@ -205,12 +205,12 @@ export function readThemePreference(): Theme {
 function writeThemePreference(theme: Theme): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, theme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     themeStorageReadFailure = null;
   } catch (cause) {
     throw new ThemeStorageError({
       operation: "write",
-      storageKey: STORAGE_KEY,
+      storageKey: THEME_STORAGE_KEY,
       theme,
       cause,
     });
@@ -228,7 +228,7 @@ function getStored(): Theme {
       ? cause
       : new ThemeStorageError({
           operation: "read",
-          storageKey: STORAGE_KEY,
+          storageKey: THEME_STORAGE_KEY,
           cause,
         });
     themeStorageReadFailure = error;
@@ -442,7 +442,7 @@ function handleSystemAppearanceChange() {
 }
 
 function handleStorageChange(e: StorageEvent) {
-  if (e.key === STORAGE_KEY) {
+  if (e.key === THEME_STORAGE_KEY) {
     themeStorageReadFailure = null;
     applyTheme(getStored(), { suppressTransitions: true });
     emitChange();
@@ -538,7 +538,7 @@ export function setTheme(next: Theme): boolean {
       ? cause
       : new ThemeStorageError({
           operation: "write",
-          storageKey: STORAGE_KEY,
+          storageKey: THEME_STORAGE_KEY,
           theme: next,
           cause,
         });

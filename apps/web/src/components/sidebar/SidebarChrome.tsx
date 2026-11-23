@@ -1,11 +1,15 @@
 import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useClientSettings, useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useTheme } from "../../hooks/useTheme";
+import { SIDEBAR_PALETTES } from "../../sidebarDesign";
+import { resolveThemeHalf } from "../../themePalette";
+import "../../sidebar-decoration.css";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
   navigateHistory,
@@ -51,10 +55,20 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const gt = useGT();
-  const backdropVariant = resolveSidebarStageBackdropVariant(
-    stageLabel,
-    environmentIdentificationMode,
-  );
+  const headerStyle = useClientSettings((settings) => settings.sidebarHeaderStyle ?? "native");
+  const animation = useClientSettings((settings) => settings.sidebarHeaderAnimation ?? "none");
+  const { theme, themeHalves, resolvedTheme } = useTheme();
+  const activeTheme = resolveThemeHalf(theme, themeHalves, resolvedTheme);
+  const palette =
+    resolvedTheme === "dark" ? SIDEBAR_PALETTES.find(({ id }) => id === activeTheme) : undefined;
+  const backdropVariant =
+    headerStyle === "native"
+      ? resolveSidebarStageBackdropVariant(stageLabel, environmentIdentificationMode)
+      : null;
+  const decorationColors = {
+    "--t3-header-primary": palette?.accent ?? "var(--primary)",
+    "--t3-header-secondary": palette?.secondary ?? "var(--ring)",
+  } as CSSProperties;
   const pillLabel =
     environmentIdentificationMode === "pill"
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
@@ -62,12 +76,20 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
   return (
     <div
+      data-sidebar-header-style={headerStyle}
+      style={decorationColors}
       className={cn(
         "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
         isElectron && "drag-region",
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
+      {animation !== "none" ? (
+        <div data-slot="t3-sidebar-motion" data-animation={animation} aria-hidden="true">
+          <span />
+          <span />
+        </div>
+      ) : null}
       <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
         <SidebarTrigger
           variant={backdropVariant ? "media-navigation" : "ghost"}

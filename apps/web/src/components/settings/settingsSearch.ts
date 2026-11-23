@@ -390,6 +390,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("latex tex katex equations formulas markdown")],
   },
   {
+    id: "sidebar-header",
+    title: msg("Sidebar header"),
+    to: "/settings/appearance",
+    searchTerms: [msg("frame HUD corners chamfer artwork")],
+  },
+  {
+    id: "sidebar-header-animation",
+    title: msg("Header animation"),
+    to: "/settings/appearance",
+    searchTerms: [msg("motion cursor blink hazard scroll dual rail hard scan")],
+  },
+  {
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",

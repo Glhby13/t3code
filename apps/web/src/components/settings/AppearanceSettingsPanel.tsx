@@ -7,6 +7,8 @@ import {
   type ChatWidth,
   type EffortDisplay,
   type EnvironmentIdentificationMode,
+  type SidebarHeaderAnimation,
+  type SidebarHeaderStyle,
   MAX_APPEARANCE_CONTRAST,
   MAX_GLASS_OPACITY,
   MAX_PANEL_ANIMATION_DURATION_MS,
@@ -84,6 +86,50 @@ const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   label: msg("Word", { $context: "show effort as a word" }),
   bars: msg("Bars", { $context: "show effort as bars" }),
 };
+
+const SIDEBAR_HEADER_LABELS: Record<SidebarHeaderStyle, string> = {
+  native: msg("Native"),
+  hud: msg("HUD Corners"),
+  chamfer: msg("CP Chamfer"),
+};
+
+const SIDEBAR_ANIMATION_LABELS: Record<SidebarHeaderAnimation, string> = {
+  none: msg("Off"),
+  "cursor-blink": msg("Cursor Blink"),
+  "hazard-scroll": msg("Hazard Scroll"),
+  "dual-rail": msg("Dual Rail"),
+  "hard-scan": msg("Hard Scan"),
+};
+
+function SidebarAppearanceSelect<Value extends string>({
+  label,
+  labels,
+  value,
+  onChange,
+}: {
+  label: string;
+  labels: Record<Value, string>;
+  value: Value;
+  onChange: (value: Value) => void;
+}) {
+  const m = useMessages();
+  return (
+    <div className="w-full sm:w-40">
+      <Select<Value> value={value} onValueChange={(next) => next !== null && onChange(next)}>
+        <SelectTrigger size="sm" className="w-full min-w-0" aria-label={label}>
+          <SelectValue>{m(labels[value])}</SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" alignItemWithTrigger={false}>
+          {(Object.keys(labels) as Value[]).map((option) => (
+            <SelectItem key={option} value={option}>
+              {m(labels[option])}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
+  );
+}
 
 export function AppearanceSettingsPanel() {
   const searchableSetting = useSearchableSetting();
@@ -165,6 +211,33 @@ export function AppearanceSettingsPanel() {
             onImportOpenChange={setIsImportThemeOpen}
           />
         </div>
+      </SettingsSection>
+
+      <SettingsSection id="appearance-sidebar" title={gt("Sidebar")}>
+        <SettingsRow
+          {...searchableSetting("sidebar-header")}
+          description={gt("Choose the frame around the sidebar wordmark and navigation.")}
+          control={
+            <SidebarAppearanceSelect
+              label={gt("Sidebar header")}
+              labels={SIDEBAR_HEADER_LABELS}
+              value={settings.sidebarHeaderStyle ?? "native"}
+              onChange={(sidebarHeaderStyle) => updateSettings({ sidebarHeaderStyle })}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("sidebar-header-animation")}
+          description={gt("Choose a motion effect for the sidebar header.")}
+          control={
+            <SidebarAppearanceSelect
+              label={gt("Header animation")}
+              labels={SIDEBAR_ANIMATION_LABELS}
+              value={settings.sidebarHeaderAnimation ?? "none"}
+              onChange={(sidebarHeaderAnimation) => updateSettings({ sidebarHeaderAnimation })}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title={gt("Interface")}>

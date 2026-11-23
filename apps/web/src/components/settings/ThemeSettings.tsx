@@ -15,6 +15,7 @@ import { readThemeHalvesRaw } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import {
   getThemeDefinition,
+  getSidebarThemeDefinitions,
   singleAppearanceOf,
   getThemeModes,
   removeCustomThemes,
@@ -830,7 +831,7 @@ export function ThemeLibrary({
             />
           );
         })}
-        {environmentThemes
+        {[...getSidebarThemeDefinitions(), ...environmentThemes]
           .filter(
             // Saved themes win id resolution; show only their card to avoid duplicate keys.
             (environmentTheme) => !customThemes.some((theme) => theme.id === environmentTheme.id),

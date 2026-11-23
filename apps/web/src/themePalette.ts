@@ -35,6 +35,7 @@ import { appAtomRegistry, subscribeAtomChanges } from "./rpc/atomRegistry";
 import { applyThemeBackground } from "./themeBackground";
 import { applyThemeCss } from "./themeCss";
 import { themeServerEnvironmentThemesAtom } from "./state/server";
+import { isSidebarPalette, SIDEBAR_PALETTES, sidebarPaletteId } from "./sidebarDesign";
 
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
@@ -337,7 +338,9 @@ function readStoredEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
     const parsed: unknown = JSON.parse(
       window.localStorage.getItem(ENVIRONMENT_THEMES_STORAGE_KEY) ?? "null",
     );
-    return Array.isArray(parsed) ? parseStoredThemes(parsed) : [];
+    return Array.isArray(parsed)
+      ? parseStoredThemes(parsed).filter((theme) => !isSidebarPalette(theme.id))
+      : [];
   } catch {
     return [];
   }
@@ -370,7 +373,7 @@ function getEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
 }
 
 export function isReservedThemeId(themeId: string): boolean {
-  return RESERVED_THEME_IDS.has(themeId);
+  return RESERVED_THEME_IDS.has(themeId) || isSidebarPalette(themeId);
 }
 
 export function getStoredCustomThemeCollection(
@@ -415,6 +418,7 @@ const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
 };
 
 function normalizeThemeId(themeId: string): string {
+  themeId = sidebarPaletteId(themeId);
   return Object.hasOwn(LEGACY_THEME_ID_ALIASES, themeId)
     ? (LEGACY_THEME_ID_ALIASES[themeId] ?? themeId)
     : themeId;
@@ -1228,10 +1232,18 @@ export function updateThemeColorFamily(
 
 const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = BUILT_IN_THEMES;
 
+let sidebarThemeDefinitions: ReadonlyArray<ThemeDefinition> | undefined;
+export function getSidebarThemeDefinitions(): ReadonlyArray<ThemeDefinition> {
+  return (sidebarThemeDefinitions ??= SIDEBAR_PALETTES.map((palette) =>
+    environmentThemeDefinition({ ...palette, appearance: "dark" }),
+  ));
+}
+
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);
   return (
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId) ??
+    getSidebarThemeDefinitions().find((definition) => definition.id === themeId) ??
     getCustomThemes().find((definition) => definition.id === themeId) ??
     getEnvironmentThemes().find((definition) => definition.id === themeId) ??
     null
